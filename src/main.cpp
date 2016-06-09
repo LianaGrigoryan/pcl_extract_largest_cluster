@@ -308,7 +308,15 @@ auto main (int argc, char * argv[])
     // Print any settings
     pcl::console::print_info (ss.str ().c_str ());
 
-    auto cluster_clouds = getClusters (input_cloud, min_cluster_size, max_cluster_size, tolerance);
+    // TODO: Add command line option
+    auto keep_organised = true;
+
+    auto cluster_clouds = getClusters (input_cloud,
+                                       min_cluster_size,
+                                       tolerance,
+                                       max_cluster_size,
+                                       keep_organised);
+
     auto & largest_cluster_cloud = cluster_clouds.at (0);
 
     if (pcl::io::savePCDFileBinaryCompressed <pcl::PointXYZRGBA> (output_pcd_file.string (),
