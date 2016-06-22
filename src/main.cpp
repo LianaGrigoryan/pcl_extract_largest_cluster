@@ -41,7 +41,7 @@ constexpr double operator "" _mm (unsigned long long mm) { return mm / 1000.0; }
 
 // Constants
 constexpr auto MIN_VALID_ARGS = 3U;
-constexpr auto MAX_VALID_ARGS = 9U;
+constexpr auto MAX_VALID_ARGS = 12U;
 constexpr auto NUM_PCD_FILES_EXPECTED = 2U;
 constexpr auto NUM_PCD_DIRS_EXPECTED = 2U;
 constexpr auto INPUT_DIR_ARG_POS = 1U;
@@ -49,20 +49,22 @@ constexpr auto OUTPUT_DIR_ARG_POS = 2U;
 constexpr auto DEFAULT_MIN_CLUSTER_SIZE = 100U;
 constexpr auto DEFAULT_MAX_CLUSTER_SIZE = 25000U;
 constexpr auto DEFAULT_TOLERANCE = 2_cm;
-constexpr auto DEFAULT_MAX_NUM_CLUSTERS = 20U;
+constexpr auto DEFAULT_MAX_NUM_CLUSTERS = 1U;
+constexpr auto DEFAULT_KEEP_ORGANISED = false;
 
 
 auto printHelp (int argc, char ** argv) -> void {
   using pcl::console::print_error;
   using pcl::console::print_info;
 
-  // TODO: Update this help
   print_error ("Syntax is: %s (<path-to-pcd-files> <path-to-store-output>) <options> | "
                    "(<pcd-file> <output-pcd-file>) <options> | -h | --help\n", argv[0]);
   print_info ("%s -h | --help : shows this help\n", argv[0]);
   print_info ("-min X : use a minimum of X points per cluster (default: 100)\n");
   print_info ("-max X : use a maximum of X points per cluster (default: 25000)\n");
-  print_info ("-tol X : the spatial distance (in meters) between clusters (default: 0.002.\n");
+  print_info ("-tol X : the spatial distance (in meters) between clusters (default: 0.002).\n");
+  print_info ("-num X : the maximum number of clusters to extract (default: 1).\n");
+  print_info ("-org : keep the output clouds organised nature (default: false).\n");
 }
 
 
@@ -109,7 +111,7 @@ auto getClusters (Cloud::Ptr input_cloud,
                   unsigned max_cluster_size = DEFAULT_MAX_CLUSTER_SIZE,
                   double cluster_tolerance = DEFAULT_TOLERANCE,
                   unsigned max_num_clusters = DEFAULT_MAX_NUM_CLUSTERS,
-                  bool keep_organised = false)
+                  bool keep_organised = DEFAULT_KEEP_ORGANISED)
 -> std::vector <Cloud::Ptr> {
   auto tree = boost::make_shared <pcl::search::KdTree <PointType>> ();
   tree->setInputCloud (input_cloud);
@@ -135,7 +137,7 @@ auto getClusters (Cloud::Ptr input_cloud,
     auto indices_ptr = boost::make_shared <pcl::PointIndices> (cluster);
     auto output_cluster_cloud = extractIndices (input_cloud, indices_ptr, keep_organised);
     output_cluster_clouds.push_back (output_cluster_cloud);
-    if (++extracted_clusters >= DEFAULT_MAX_NUM_CLUSTERS)
+    if (++extracted_clusters >= max_num_clusters)
       break;
   }
 
@@ -147,7 +149,8 @@ auto processLargestClusterExtraction (fs::path input_cloud_path,
                                       fs::path output_cloud_path,
                                       unsigned min_cluster_size = DEFAULT_MIN_CLUSTER_SIZE,
                                       unsigned max_cluster_size = DEFAULT_MAX_CLUSTER_SIZE,
-                                      double cluster_tolerance = DEFAULT_TOLERANCE)
+                                      double cluster_tolerance = DEFAULT_TOLERANCE,
+                                      bool keep_organised = DEFAULT_KEEP_ORGANISED)
 -> bool {
   // Load input pcd
   auto input_cloud = boost::make_shared <Cloud> ();
@@ -160,10 +163,13 @@ auto processLargestClusterExtraction (fs::path input_cloud_path,
                                     min_cluster_size,
                                     max_cluster_size,
                                     cluster_tolerance,
-                                    1U);
+                                    1U,
+                                    keep_organised);
 
-  if (output_clouds.size () < 1_sz)
+  if (output_clouds.size () < 1_sz) {
+    Logger::log (Logger::INFO, "No valid clusters found for %s\n", input_cloud_path.c_str ());
     return false;
+  }
 
   auto & largest_cluster_cloud = output_clouds.at (0);
 
@@ -172,8 +178,6 @@ auto processLargestClusterExtraction (fs::path input_cloud_path,
     Logger::log (Logger::ERROR, "Failed to save: %s\n", output_cloud_path);
     return false;
   }
-
-  //  Logger::log(Logger::INFO, "Output file %s written.\n", output_cloud_path.c_str());
 
   return true;
 }
@@ -199,7 +203,8 @@ auto euclideanClusteringRunner (std::deque <fs::path> & paths_deque,
                                 std::mutex & deque_mutex,
                                 unsigned min_cluster_size = DEFAULT_MIN_CLUSTER_SIZE,
                                 unsigned max_cluster_size = DEFAULT_MAX_CLUSTER_SIZE,
-                                double cluster_tolerance = DEFAULT_TOLERANCE)
+                                double cluster_tolerance = DEFAULT_TOLERANCE,
+                                bool keep_organised = DEFAULT_KEEP_ORGANISED)
 -> bool {
   auto input_pcd_file = getFront (paths_deque, deque_mutex);
 
@@ -209,7 +214,8 @@ auto euclideanClusteringRunner (std::deque <fs::path> & paths_deque,
                                      output_pcd_file,
                                      min_cluster_size,
                                      max_cluster_size,
-                                     cluster_tolerance);
+                                     cluster_tolerance,
+                                     keep_organised);
     input_pcd_file = getFront (paths_deque, deque_mutex);
   }
   Logger::log (Logger::INFO, "Thread exiting.\n");
@@ -222,7 +228,8 @@ auto threadedClusterSegmentation (std::deque <fs::path> input_files,
                                   fs::path output_dir,
                                   unsigned min_cluster_size = DEFAULT_MIN_CLUSTER_SIZE,
                                   unsigned max_cluster_size = DEFAULT_MAX_CLUSTER_SIZE,
-                                  double cluster_tolerance = DEFAULT_TOLERANCE)
+                                  double cluster_tolerance = DEFAULT_TOLERANCE,
+                                  bool keep_organised = DEFAULT_KEEP_ORGANISED)
 -> bool {
   auto runners = std::vector <std::shared_ptr <std::thread>> {};
   auto num_threads_to_use = std::thread::hardware_concurrency ();
@@ -235,7 +242,8 @@ auto threadedClusterSegmentation (std::deque <fs::path> input_files,
                                                   std::ref (deque_mutex),
                                                   min_cluster_size,
                                                   max_cluster_size,
-                                                  cluster_tolerance);
+                                                  cluster_tolerance,
+                                                  keep_organised);
     runners.push_back (runner);
   }
 
@@ -270,6 +278,8 @@ auto main (int argc, char * argv[])
   auto min_cluster_size = DEFAULT_MIN_CLUSTER_SIZE;
   auto max_cluster_size = DEFAULT_MAX_CLUSTER_SIZE;
   auto tolerance = DEFAULT_TOLERANCE;
+  auto num_clusters = DEFAULT_MAX_NUM_CLUSTERS;
+  auto keep_organised = DEFAULT_KEEP_ORGANISED;
 
   if (pcl::console::parse_argument (argc, argv, "-min", min_cluster_size) != -1)
     consumed_args += 2;
@@ -280,11 +290,21 @@ auto main (int argc, char * argv[])
   if (pcl::console::parse_argument (argc, argv, "-tol", tolerance) != -1)
     consumed_args += 2;
 
+  if (pcl::console::parse_argument (argc, argv, "-num", num_clusters) != -1)
+    consumed_args += 2;
+
+  if (pcl::console::find_switch (argc, argv, "-org")) {
+    keep_organised = true;
+    consumed_args += 1;
+  }
+
   auto ss = std::stringstream {};
+  auto keep_organised_setting = keep_organised ? "true" : "false";
   ss << "Applying euclidean cluster extraction with the following settings: " << std::endl <<
       "\tMinimum cluster size = " << min_cluster_size << std::endl <<
       "\tMaximum cluster size = " << max_cluster_size << std::endl <<
-      "\tCluster tolerance = " << tolerance << std::endl << std::endl;
+      "\tCluster tolerance = " << tolerance << std::endl <<
+      "\tKeep organised = " << keep_organised_setting << std::endl << std::endl;
 
   // Check if we are working with pcd files
   auto pcd_arg_indices = pcl::console::parse_file_extension_argument (argc, argv, ".pcd");
@@ -308,16 +328,14 @@ auto main (int argc, char * argv[])
     // Print any settings
     pcl::console::print_info (ss.str ().c_str ());
 
-    // TODO: Add command line option
-    auto keep_organised = true;
-
     auto cluster_clouds = getClusters (input_cloud,
                                        min_cluster_size,
-                                       tolerance,
                                        max_cluster_size,
+                                       tolerance,
+                                       num_clusters,
                                        keep_organised);
 
-    auto & largest_cluster_cloud = cluster_clouds.at (0);
+    auto const & largest_cluster_cloud = cluster_clouds.at (0);
 
     if (pcl::io::savePCDFileBinaryCompressed <pcl::PointXYZRGBA> (output_pcd_file.string (),
                                                                   *largest_cluster_cloud) == -1) {
@@ -358,24 +376,15 @@ auto main (int argc, char * argv[])
     // We have the input and output dir now
     auto input_files = getPcdFilesInPath (input_dir);
 
-    // Load an input pcd
-    auto input_cloud = boost::make_shared <Cloud> ();
-    auto mid_point = input_files.size () / 2;
-    auto sample_cloud_file = input_files.at (mid_point);
-    if (pcl::io::loadPCDFile <pcl::PointXYZRGBA> (sample_cloud_file.c_str (), *input_cloud) == -1) {
-      pcl::console::print_error ("Failed to load: %s\n", sample_cloud_file.c_str ());
-      printHelp (argc, argv);
-      return -1;
-    }
-
-    // Print any settings
+    // Print settings
     pcl::console::print_info (ss.str ().c_str ());
 
     threadedClusterSegmentation (input_files,
                                  output_dir,
                                  min_cluster_size,
                                  max_cluster_size,
-                                 tolerance);
+                                 tolerance,
+                                 keep_organised);
   }
   return 0;
 }
